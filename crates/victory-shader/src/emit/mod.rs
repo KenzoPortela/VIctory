@@ -122,6 +122,28 @@ pub fn loop_limit() -> u32 {
     })
 }
 
+/// With the `diagnostics` feature, `VICTORY_SHADER_LOOP_BUDGET` (decimal or
+/// `0x` hex, at least 1) also bounds the iterations of all of an
+/// invocation's loops together, so nested loops cannot multiply the
+/// per-loop limit (a pass whose inputs were never written can otherwise
+/// keep a GPU busy past the host's timeout). Unset: no budget. Part of the
+/// translation, like the limit.
+pub fn loop_budget() -> Option<u32> {
+    static BUDGET: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        if !cfg!(feature = "diagnostics") {
+            return None;
+        }
+        let v = std::env::var("VICTORY_SHADER_LOOP_BUDGET").ok()?;
+        let v = v.trim();
+        let n = match v.strip_prefix("0x") {
+            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+            None => v.parse().ok()?,
+        };
+        (n > 0).then_some(n)
+    })
+}
+
 /// `VICTORY_SHADER_LOOP_LIMIT`'s value; the default when it is unset,
 /// unreadable or 0. Pure, for testing.
 fn parse_loop_limit(value: Option<&str>) -> u32 {

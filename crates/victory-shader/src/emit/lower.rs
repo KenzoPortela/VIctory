@@ -222,6 +222,9 @@ struct Lower<'a> {
     counters: HashMap<usize, (V, Vec<(V, usize)>)>,
     /// The block a loop stopped by [`LOOP_LIMIT`] leaves the program from.
     abort: Option<usize>,
+    /// Iterations of every loop of this invocation so far, when a budget
+    /// is set ([`super::loop_budget`]).
+    iterations: Option<V>,
 }
 
 /// Iterations after which a loop is left (per entry into it), unless
@@ -515,6 +518,7 @@ impl<'a> Lower<'a> {
             code_table: None,
             counters: HashMap::new(),
             abort: None,
+            iterations: None,
         }
     }
 
@@ -6843,7 +6847,29 @@ impl<'a> Lower<'a> {
             .expect("header")
             .1
             .push((next, c));
-        self.s.m.cmp(c, p, next, limit)
+        let own = self.s.m.cmp(c, p, next, limit);
+        let Some(budget) = super::loop_budget() else {
+            return own;
+        };
+        // Nested loops multiply a per-loop limit; the budget bounds every
+        // loop of the invocation together.
+        let g = match self.iterations {
+            Some(g) => g,
+            None => {
+                let z = self.s.m.i32(0);
+                let g = self.s.m.private_global("loop_iterations", z);
+                self.iterations = Some(g);
+                g
+            }
+        };
+        let done = self.s.m.load(c, g);
+        let total = self.s.m.bin(c, Bin::Add, done, one);
+        self.s.m.store(c, g, total);
+        let budget = self.s.m.i32(budget);
+        let within = self.s.m.cmp(c, p, total, budget);
+        // `p` below: go on while both hold; at or above: stop when either does.
+        let both = if p == pred::IULT { Bin::And } else { Bin::Or };
+        self.s.m.bin(c, both, own, within)
     }
 
     /// The block a lane stopped by [`LOOP_LIMIT`] leaves through.
